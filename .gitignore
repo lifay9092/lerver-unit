@@ -29,3 +29,8 @@ unit-data/
 
 # 本地临时笔记
 临时需求.txt
+
+# design 目录仅提交图标源图与脚本
+design/*
+!design/icon-source.png
+!design/crop_icon.py
