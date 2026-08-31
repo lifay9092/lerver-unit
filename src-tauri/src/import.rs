@@ -69,7 +69,11 @@ pub struct ImportPreviewRow {
     /// 数据行号（从 1 开始，不含表头）
     pub row: usize,
     pub case_input: CaseInput,
-    /// 校验错误信息；None 表示合法
+    /// 行状态：ok（合法可用）/ ignored（请求地址为空，导入时忽略）/ error（校验失败）
+    pub status: String,
+    /// 用例名称为空、提交时将按「分组名_序号」自动命名（仅 ok 行有意义）
+    pub will_auto_name: bool,
+    /// 校验错误信息；None 表示合法（status != "error" 时恒为 None）
     pub error: Option<String>,
 }
 
@@ -78,6 +82,16 @@ pub struct ImportPreviewRow {
 pub struct ImportResult {
     pub success_count: usize,
     pub failed: Vec<ImportFailure>,
+    /// 被忽略的行数（请求地址为空，不计入失败）
+    pub ignored_count: usize,
+    pub ignored: Vec<ImportIgnored>,
+}
+
+/// 被忽略的导入行（请求地址为空）
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportIgnored {
+    pub row: usize,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,10 +102,20 @@ pub struct ImportFailure {
 }
 
 /// 解析中间结构（不序列化）
+#[derive(Debug, Clone)]
 struct ParsedRow {
     row: usize,
     input: CaseInput,
+    status: RowStatus,
     error: Option<String>,
+}
+
+/// 解析行状态（内部用）
+#[derive(Debug, Clone, PartialEq)]
+enum RowStatus {
+    Ok,
+    Ignored,
+    Error,
 }
 
 // ---------- 启动种子 ----------
@@ -306,7 +330,7 @@ fn std_sample(std: &str) -> &'static str {
         "query_params" => "{\"id\":1}",
         "request_body" => "{\"username\":\"admin\",\"password\":\"123456\"}",
         "assert_expr" => "status == 200",
-        "timeout_secs" => "30",
+        "timeout_secs" => "",
         "remark" => "示例备注",
         _ => "",
     }
@@ -569,10 +593,26 @@ fn parse_file(file_path: &str, template: &TemplateRow) -> Result<Vec<ParsedRow>,
         .enumerate()
         .map(|(i, row_map)| {
             let input = build_case(&row_map, &mappings);
-            let error = validate_case(&input).err().map(|e| e.msg);
+            // 请求地址为空 → 忽略（不计失败，FR-C4）
+            if input.url.trim().is_empty() {
+                return ParsedRow {
+                    row: i + 1,
+                    input,
+                    status: RowStatus::Ignored,
+                    error: None,
+                };
+            }
+            // 导入场景允许用例名称为空（提交时自动命名），故 allow_empty_name=true
+            let error = validate_case(&input, true).err().map(|e| e.msg);
+            let status = if error.is_some() {
+                RowStatus::Error
+            } else {
+                RowStatus::Ok
+            };
             ParsedRow {
                 row: i + 1,
                 input,
+                status,
                 error,
             }
         })
@@ -592,10 +632,21 @@ pub fn import_preview(
     let parsed = parse_file(&file_path, &template)?;
     Ok(parsed
         .into_iter()
-        .map(|p| ImportPreviewRow {
-            row: p.row,
-            case_input: p.input,
-            error: p.error,
+        .map(|p| {
+            let status_str = match p.status {
+                RowStatus::Ok => "ok",
+                RowStatus::Ignored => "ignored",
+                RowStatus::Error => "error",
+            }
+            .to_string();
+            let will_auto_name = p.status == RowStatus::Ok && p.input.case_name.trim().is_empty();
+            ImportPreviewRow {
+                row: p.row,
+                case_input: p.input,
+                status: status_str,
+                will_auto_name,
+                error: p.error,
+            }
         })
         .collect())
 }
@@ -612,17 +663,36 @@ pub fn import_commit(
     let _: i64 = conn
         .query_row("SELECT id FROM groups WHERE id = ?1", params![group_id], |r| r.get(0))
         .map_err(|_| AppError::new("目标分组不存在"))?;
+    // 目标分组名称与现有用例数（用于导入时自动命名「分组名_序号」，FR-C4）
+    let group_name: String = conn
+        .query_row("SELECT name FROM groups WHERE id = ?1", params![group_id], |r| r.get(0))
+        .unwrap_or_default();
+    let existing: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM test_cases WHERE group_id = ?1",
+            params![group_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     let template = row_from(&conn, template_id)?;
     let parsed = parse_file(&file_path, &template)?;
 
     let mut success_count = 0usize;
     let mut failed: Vec<ImportFailure> = Vec::new();
+    let mut ignored: Vec<ImportIgnored> = Vec::new();
+    // 自动命名序号：从分组现有用例数 +1 起，本次导入内连续递增
+    let mut seq: i64 = existing;
+
     for p in &parsed {
-        let case_name = if p.input.case_name.trim().is_empty() {
-            format!("(第{}条)", p.row)
-        } else {
-            p.input.case_name.clone()
-        };
+        // 请求地址为空 → 忽略（不计失败，FR-C4）
+        if p.status == RowStatus::Ignored {
+            ignored.push(ImportIgnored {
+                row: p.row,
+                reason: "请求地址为空，已忽略".into(),
+            });
+            continue;
+        }
+        let case_name = p.input.case_name.trim().to_string();
         if let Some(err) = &p.error {
             failed.push(ImportFailure {
                 row: p.row,
@@ -633,11 +703,21 @@ pub fn import_commit(
         }
         let mut input = p.input.clone();
         input.group_id = Some(group_id);
-        match validate_case(&input).and_then(|_| insert_case(&conn, &input)) {
+        // 用例名称为空 → 自动命名「分组名_序号」
+        if input.case_name.trim().is_empty() {
+            seq += 1;
+            let gname = if group_name.trim().is_empty() {
+                "group"
+            } else {
+                group_name.trim()
+            };
+            input.case_name = format!("{}_{}", gname, seq);
+        }
+        match validate_case(&input, true).and_then(|_| insert_case(&conn, &input)) {
             Ok(_) => success_count += 1,
             Err(e) => failed.push(ImportFailure {
                 row: p.row,
-                case_name,
+                case_name: input.case_name.clone(),
                 reason: e.msg,
             }),
         }
@@ -645,6 +725,8 @@ pub fn import_commit(
     Ok(ImportResult {
         success_count,
         failed,
+        ignored_count: ignored.len(),
+        ignored,
     })
 }
 
@@ -746,25 +828,96 @@ mod tests {
             let parsed = parse_file(&path, &tpl).unwrap();
             let mut success = 0usize;
             let mut failed = Vec::new();
+            let mut ignored = Vec::new();
             for p in &parsed {
+                if p.status == RowStatus::Ignored {
+                    ignored.push(ImportIgnored { row: p.row, reason: "请求地址为空".into() });
+                    continue;
+                }
                 if let Some(err) = &p.error {
                     failed.push(ImportFailure { row: p.row, case_name: p.input.case_name.clone(), reason: err.clone() });
                     continue;
                 }
                 let mut input = p.input.clone();
                 input.group_id = Some(1);
-                match validate_case(&input).and_then(|_| insert_case(&conn, &input)) {
+                match validate_case(&input, true).and_then(|_| insert_case(&conn, &input)) {
                     Ok(_) => success += 1,
                     Err(e) => failed.push(ImportFailure { row: p.row, case_name: p.input.case_name.clone(), reason: e.msg }),
                 }
             }
-            ImportResult { success_count: success, failed }
+            ImportResult { success_count: success, failed, ignored_count: ignored.len(), ignored }
         };
         assert_eq!(res.success_count, 2);
         assert_eq!(res.failed.len(), 1);
         // 库内应有 2 条
         let cnt: i64 = conn.query_row("SELECT COUNT(*) FROM test_cases", [], |r| r.get(0)).unwrap();
         assert_eq!(cnt, 2);
+    }
+
+    #[test]
+    fn import_ignores_empty_url_and_autonames() {
+        let conn = setup();
+        conn.execute("INSERT INTO groups (id, name) VALUES (1, 'G1')", []).unwrap();
+        let builtin_mappings: String = conn
+            .query_row("SELECT mappings FROM templates WHERE is_builtin=1", [], |r| r.get::<_, String>(0))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO templates (name, type, mappings) VALUES ('jt','json',?1)",
+            params![builtin_mappings],
+        )
+        .unwrap();
+        let tpl = conn.query_row("SELECT id,type,mappings FROM templates WHERE name='jt'", [], |r| {
+            Ok(TemplateRow { id: r.get(0)?, name: "".into(), type_: r.get(1)?, mappings: r.get(2)?, is_builtin: false, created_at: "".into(), updated_at: "".into() })
+        }).unwrap();
+        // 4 条：命名有效 / 名称空(url有效) / url空 / 非法方法
+        let json = r#"[
+            {"用例名称":"命名用例","请求方法":"POST","请求地址":"/api/login"},
+            {"用例名称":"","请求方法":"GET","请求地址":"/api/empty_name"},
+            {"用例名称":"","请求方法":"GET","请求地址":""},
+            {"用例名称":"坏方法","请求方法":"TRACE","请求地址":"/api/z"}
+        ]"#;
+        let path = write_temp("m4_rules.json", json);
+        // 复刻 import_commit 核心（FR-C4：忽略空 url + 空名自动命名「分组名_序号」）
+        let parsed = parse_file(&path, &tpl).unwrap();
+        let group_name: String = conn.query_row("SELECT name FROM groups WHERE id=1", [], |r| r.get(0)).unwrap();
+        let existing: i64 = conn.query_row("SELECT COUNT(*) FROM test_cases WHERE group_id=1", [], |r| r.get(0)).unwrap();
+        let mut success = 0usize;
+        let mut failed = Vec::new();
+        let mut ignored = Vec::new();
+        let mut seq: i64 = existing;
+        for p in &parsed {
+            if p.status == RowStatus::Ignored {
+                ignored.push(ImportIgnored { row: p.row, reason: "请求地址为空".into() });
+                continue;
+            }
+            if let Some(err) = &p.error {
+                failed.push(ImportFailure { row: p.row, case_name: p.input.case_name.clone(), reason: err.clone() });
+                continue;
+            }
+            let mut input = p.input.clone();
+            input.group_id = Some(1);
+            if input.case_name.trim().is_empty() {
+                seq += 1;
+                input.case_name = format!("{}_{}", group_name.trim(), seq);
+            }
+            match validate_case(&input, true).and_then(|_| insert_case(&conn, &input)) {
+                Ok(_) => success += 1,
+                Err(e) => failed.push(ImportFailure { row: p.row, case_name: input.case_name.clone(), reason: e.msg }),
+            }
+        }
+        assert_eq!(success, 2);
+        assert_eq!(ignored.len(), 1);
+        assert_eq!(failed.len(), 1);
+        // 自动命名结果：G1_1
+        let names: Vec<String> = conn
+            .prepare("SELECT case_name FROM test_cases WHERE group_id=1 ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(names.contains(&"命名用例".to_string()));
+        assert!(names.contains(&"G1_1".to_string()));
     }
 
     #[test]

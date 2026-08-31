@@ -120,10 +120,12 @@ export default function ImportWizard({ open, onClose, onImported }: Props) {
       setResult(res);
       setCurrent(3);
       onImported();
-      if (res.failed.length === 0) {
+      if (res.failed.length === 0 && res.ignored_count === 0) {
         message.success(`导入成功，共 ${res.success_count} 条`);
       } else {
-        message.warning(`导入完成：${res.success_count} 条成功，${res.failed.length} 条失败`);
+        message.warning(
+          `导入完成：${res.success_count} 条成功，${res.failed.length} 条失败，${res.ignored_count} 条忽略（地址为空）`,
+        );
       }
     } catch (e) {
       message.error((e as Error).message);
@@ -147,17 +149,22 @@ export default function ImportWizard({ open, onClose, onImported }: Props) {
     {
       title: "校验",
       key: "status",
-      width: 90,
+      width: 110,
       render: (_, r) =>
-        r.error ? (
+        r.status === "error" ? (
           <Tag color="error">无效</Tag>
+        ) : r.status === "ignored" ? (
+          <Tag color="default">忽略</Tag>
+        ) : r.will_auto_name ? (
+          <Tag color="purple">有效(自动命名)</Tag>
         ) : (
           <Tag color="success">有效</Tag>
         ),
     },
   ];
 
-  const validCount = preview.filter((r) => !r.error).length;
+  const validCount = preview.filter((r) => r.status === "ok").length;
+  const ignoredCount = preview.filter((r) => r.status === "ignored").length;
   const failColumns: ColumnsType<ImportFailure> = [
     { title: "行号", dataIndex: "row", width: 70 },
     { title: "用例名称", dataIndex: "case_name", ellipsis: true },
@@ -234,12 +241,14 @@ export default function ImportWizard({ open, onClose, onImported }: Props) {
           {preview.length > 0 && (
             <>
               <Alert
-                type={validCount === preview.length ? "success" : "warning"}
+                type={validCount === preview.length - ignoredCount ? "success" : "warning"}
                 showIcon
                 style={{ marginBottom: 12 }}
-                message={`共解析 ${preview.length} 条，有效 ${validCount} 条，无效 ${
-                  preview.length - validCount
-                } 条（无效行导入时将被跳过）`}
+                message={`共解析 ${preview.length} 条，有效 ${validCount} 条，忽略 ${
+                  ignoredCount
+                } 条（请求地址为空），失败 ${
+                  preview.length - validCount - ignoredCount
+                } 条（失败/忽略行导入时跳过）`}
               />
               <Table<ImportPreviewRow>
                 rowKey="row"
@@ -265,7 +274,7 @@ export default function ImportWizard({ open, onClose, onImported }: Props) {
             type={result.failed.length === 0 ? "success" : "warning"}
             showIcon
             style={{ marginBottom: 12 }}
-            message={`导入完成：成功 ${result.success_count} 条，失败 ${result.failed.length} 条`}
+            message={`导入完成：成功 ${result.success_count} 条，失败 ${result.failed.length} 条，忽略 ${result.ignored_count} 条（请求地址为空）`}
           />
           {result.failed.length > 0 && (
             <Table<ImportFailure>

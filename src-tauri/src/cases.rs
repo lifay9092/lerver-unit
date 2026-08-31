@@ -207,9 +207,10 @@ fn group_path_map(conn: &Connection) -> Result<std::collections::HashMap<i64, St
 // ---------- 校验 ----------
 
 /// 用例字段校验（供 case_create / 导入复用）
-pub(crate) fn validate_case(input: &CaseInput) -> Result<(), AppError> {
+/// `allow_empty_name`：导入场景允许名称为空（由导入流程自动命名，FR-C4），其余场景必须为非空
+pub(crate) fn validate_case(input: &CaseInput, allow_empty_name: bool) -> Result<(), AppError> {
     let name = input.case_name.trim();
-    if name.is_empty() {
+    if !allow_empty_name && name.is_empty() {
         return Err(AppError::new("用例名称不能为空"));
     }
     if name.chars().count() > 100 {
@@ -245,9 +246,9 @@ pub(crate) fn validate_case(input: &CaseInput) -> Result<(), AppError> {
         }
     }
 
-    let timeout = input.timeout_secs.unwrap_or(30);
+    let timeout = input.timeout_secs.unwrap_or(10);
     if !(1..=600).contains(&timeout) {
-        return Err(AppError::new("超时时间需在 1 ~ 600 秒之间"));
+        return Err(AppError::new("超时时间需在 1 ~ 600 秒之间（不填默认 10 秒）"));
     }
 
     // 校验表达式：保存阶段即报错（FR-C5）
@@ -273,7 +274,7 @@ pub(crate) fn insert_case(conn: &Connection, input: &CaseInput) -> Result<i64, A
             input.query_params.clone().unwrap_or_default(),
             input.request_body.clone().unwrap_or_default(),
             input.assert_expr.clone().unwrap_or_default(),
-            input.timeout_secs.unwrap_or(30),
+            input.timeout_secs.unwrap_or(10),
             input.remark.clone().unwrap_or_default(),
         ],
     )?;
@@ -303,7 +304,7 @@ fn validate_url(url: &str) -> Result<(), AppError> {
 /// 新增用例（FR-C3）
 #[tauri::command]
 pub fn case_create(input: CaseInput, state: State<'_, AppState>) -> Result<CaseRow, AppError> {
-    validate_case(&input)?;
+    validate_case(&input, false)?;
     let conn = state.db.lock().unwrap();
     if let Some(gid) = input.group_id {
         let _: i64 = conn
@@ -319,7 +320,7 @@ pub fn case_create(input: CaseInput, state: State<'_, AppState>) -> Result<CaseR
 #[tauri::command]
 pub fn case_update(input: CaseInput, state: State<'_, AppState>) -> Result<CaseRow, AppError> {
     let id = input.id.ok_or_else(|| AppError::new("缺少用例 id"))?;
-    validate_case(&input)?;
+    validate_case(&input, false)?;
     let conn = state.db.lock().unwrap();
     if let Some(gid) = input.group_id {
         let _: i64 = conn
@@ -341,7 +342,7 @@ pub fn case_update(input: CaseInput, state: State<'_, AppState>) -> Result<CaseR
             input.query_params.clone().unwrap_or_default(),
             input.request_body.clone().unwrap_or_default(),
             input.assert_expr.clone().unwrap_or_default(),
-            input.timeout_secs.unwrap_or(30),
+            input.timeout_secs.unwrap_or(10),
             input.remark.clone().unwrap_or_default(),
             id,
         ],
@@ -447,47 +448,47 @@ mod tests {
 
     #[test]
     fn validate_accepts_good_input() {
-        validate_case(&good_input()).unwrap();
+        validate_case(&good_input(), false).unwrap();
         let mut i = good_input();
         i.url = "https://api.example.com/login".into();
-        validate_case(&i).unwrap();
+        validate_case(&i, false).unwrap();
         i.url = "{{baseUrl}}/api/login".into();
-        validate_case(&i).unwrap();
+        validate_case(&i, false).unwrap();
     }
 
     #[test]
     fn validate_rejects_bad_input() {
         let mut i = good_input();
         i.method = "TRACE".into();
-        assert!(validate_case(&i).err().unwrap().msg.contains("请求方法"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("请求方法"));
 
         let mut i = good_input();
         i.content_type = "text/plain".into();
-        assert!(validate_case(&i).err().unwrap().msg.contains("内容类型"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("内容类型"));
 
         let mut i = good_input();
         i.url = "api/login".into();
-        assert!(validate_case(&i).err().unwrap().msg.contains("请求地址"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("请求地址"));
 
         let mut i = good_input();
         i.headers = Some("{bad json}".into());
-        assert!(validate_case(&i).err().unwrap().msg.contains("请求头"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("请求头"));
 
         let mut i = good_input();
         i.query_params = Some("[1,2]".into());
-        assert!(validate_case(&i).err().unwrap().msg.contains("必须是 JSON 对象"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("必须是 JSON 对象"));
 
         let mut i = good_input();
         i.timeout_secs = Some(0);
-        assert!(validate_case(&i).err().unwrap().msg.contains("超时时间"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("超时时间"));
 
         let mut i = good_input();
         i.assert_expr = Some("status === 200".into());
-        assert!(validate_case(&i).err().unwrap().msg.contains("比较符"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("比较符"));
 
         let mut i = good_input();
         i.case_name = "  ".into();
-        assert!(validate_case(&i).err().unwrap().msg.contains("用例名称"));
+        assert!(validate_case(&i, false).err().unwrap().msg.contains("用例名称"));
     }
 
     #[test]

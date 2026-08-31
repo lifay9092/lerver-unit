@@ -12,6 +12,17 @@ pub struct EnvItem {
     pub id: String,
     pub name: String,
     pub base_url: String,
+    /// 环境通用请求头（key-value），执行/试运行时自动与用例自身 headers 合并（FR-E7）。
+    /// 旧 environments.json 缺少该字段时按空列表兼容。
+    #[serde(default)]
+    pub common_headers: Vec<CommonHeader>,
+}
+
+/// 环境通用请求头单项（FR-E7）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommonHeader {
+    pub key: String,
+    pub value: String,
 }
 
 /// 环境配置文件结构：environments.json
@@ -31,14 +42,38 @@ impl Default for EnvFile {
                     id: "dev".into(),
                     name: "开发环境".into(),
                     base_url: "http://127.0.0.1:8080".into(),
+                    common_headers: vec![],
                 },
                 EnvItem {
                     id: "test".into(),
                     name: "测试环境".into(),
                     base_url: "https://test-api.example.com".into(),
+                    common_headers: vec![],
                 },
             ],
         }
+    }
+}
+
+impl EnvItem {
+    /// 合并环境通用请求头与用例自身请求头（FR-E7）。
+    /// 规则：环境通用请求头先入，用例自身 headers 后入覆盖同名 key。
+    /// 返回合并后的 JSON 对象字符串（非法用例 headers 仅保留环境头）。
+    pub fn merged_headers(&self, case_headers_json: &str) -> String {
+        let mut map = serde_json::Map::new();
+        for h in &self.common_headers {
+            if !h.key.trim().is_empty() {
+                map.insert(h.key.clone(), serde_json::Value::String(h.value.clone()));
+            }
+        }
+        if let Ok(serde_json::Value::Object(case)) =
+            serde_json::from_str::<serde_json::Value>(case_headers_json)
+        {
+            for (k, v) in case {
+                map.insert(k, v);
+            }
+        }
+        serde_json::Value::Object(map).to_string()
     }
 }
 
@@ -50,6 +85,11 @@ impl EnvFile {
             .find(|e| e.id == self.active)
             .map(|e| e.base_url.as_str())
             .unwrap_or("")
+    }
+
+    /// 当前激活环境（找不到时返回 None）
+    pub fn active_env(&self) -> Option<&EnvItem> {
+        self.environments.iter().find(|e| e.id == self.active)
     }
 
     /// 当前激活环境名称
@@ -181,5 +221,62 @@ mod tests {
     #[test]
     fn empty_url_errors() {
         assert!(resolve_url("  ", BASE).is_err());
+    }
+
+    #[test]
+    fn merge_headers_case_overrides_env() {
+        let env = EnvItem {
+            id: "dev".into(),
+            name: "dev".into(),
+            base_url: "http://x".into(),
+            common_headers: vec![
+                CommonHeader { key: "Authorization".into(), value: "Bearer env".into() },
+                CommonHeader { key: "X-Env".into(), value: "e1".into() },
+            ],
+        };
+        // 用例自身包含同名 Authorization（应覆盖）与独有 X-Case
+        let merged: serde_json::Value =
+            serde_json::from_str(&env.merged_headers(r#"{"Authorization":"Bearer case","X-Case":"c1"}"#)).unwrap();
+        assert_eq!(merged["Authorization"], "Bearer case");
+        assert_eq!(merged["X-Env"], "e1");
+        assert_eq!(merged["X-Case"], "c1");
+    }
+
+    #[test]
+    fn merge_headers_only_env_when_case_empty() {
+        let env = EnvItem {
+            id: "dev".into(),
+            name: "dev".into(),
+            base_url: "http://x".into(),
+            common_headers: vec![CommonHeader { key: "X-Env".into(), value: "e1".into() }],
+        };
+        let merged: serde_json::Value = serde_json::from_str(&env.merged_headers("")).unwrap();
+        assert_eq!(merged["X-Env"], "e1");
+        assert_eq!(merged.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn merge_headers_invalid_case_keeps_env() {
+        let env = EnvItem {
+            id: "dev".into(),
+            name: "dev".into(),
+            base_url: "http://x".into(),
+            common_headers: vec![CommonHeader { key: "X-Env".into(), value: "e1".into() }],
+        };
+        // 用例 headers 非法 JSON 时，仅保留环境头，不报错
+        let merged: serde_json::Value = serde_json::from_str(&env.merged_headers("not-json")).unwrap();
+        assert_eq!(merged["X-Env"], "e1");
+    }
+
+    #[test]
+    fn env_item_default_has_empty_headers() {
+        let cfg = EnvFile::default();
+        for e in &cfg.environments {
+            assert!(e.common_headers.is_empty());
+        }
+        // 旧文件缺 common_headers 字段可正常反序列化
+        let legacy = r#"{"active":"dev","environments":[{"id":"dev","name":"开发","base_url":"http://x"}]}"#;
+        let parsed: EnvFile = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.environments[0].common_headers.is_empty());
     }
 }

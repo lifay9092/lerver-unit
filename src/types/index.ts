@@ -27,6 +27,8 @@ export interface EnvItem {
   id: string;
   name: string;
   base_url: string;
+  /** 环境通用请求头（FR-E7），执行/试运行时自动与用例自身 headers 合并 */
+  common_headers?: { key: string; value: string }[];
 }
 
 /** 环境配置文件（env_config.rs EnvFile） */
@@ -173,6 +175,10 @@ export interface TemplateQuery {
 export interface ImportPreviewRow {
   row: number;
   case_input: CaseInput;
+  /** ok（合法）/ ignored（请求地址为空，忽略）/ error（校验失败） */
+  status: "ok" | "ignored" | "error";
+  /** 用例名称为空、提交时将自动命名 */
+  will_auto_name: boolean;
   error: string | null;
 }
 
@@ -187,6 +193,30 @@ export interface ImportFailure {
 export interface ImportResult {
   success_count: number;
   failed: ImportFailure[];
+  ignored_count: number;
+  ignored: { row: number; reason: string }[];
+}
+
+// ============ 用例批量导出/导入（固定 JSON，case_export.rs，M9） ============
+
+/** 导出范围（case_export.rs ExportScope）：kind = all / group / selected */
+export interface CaseExportScope {
+  kind: "all" | "group" | "selected";
+  group_id?: number | null;
+  recursive?: boolean;
+  case_ids?: number[];
+}
+
+/** 导出入参（case_export.rs CaseExportInput） */
+export interface CaseExportInput {
+  scope: CaseExportScope;
+  file_path: string;
+}
+
+/** 导出结果摘要（case_export.rs ExportSummary） */
+export interface CaseExportResult {
+  file_path: string;
+  count: number;
 }
 
 /** 标准字段 → 文件列/路径 的映射（前端维护用） */

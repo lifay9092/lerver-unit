@@ -190,7 +190,7 @@ export default function RunDialog({ open, onClose, caseIds, title }: Props) {
           disabled={running}
         />
         <Typography.Text type="secondary">
-          共 {caseIds.length} 条用例，按当前激活环境串行执行（单条超时默认 30s）
+          共 {caseIds.length} 条用例，按当前激活环境串行执行（单条超时默认 10s）
         </Typography.Text>
         <Progress percent={percent} status={running ? "active" : "normal"} />
         <Table<ProgressRow>

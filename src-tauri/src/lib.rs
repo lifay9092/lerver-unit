@@ -1,5 +1,6 @@
 mod assert_expr;
 mod cases;
+mod case_export;
 mod executor;
 mod reports;
 mod commands;
@@ -70,6 +71,9 @@ pub fn run() {
             import::read_json_fields,
             import::import_preview,
             import::import_commit,
+            case_export::case_export_json,
+            case_export::case_import_json_preview,
+            case_export::case_import_json_commit,
             reports::report_page,
             reports::report_detail,
             reports::report_delete,

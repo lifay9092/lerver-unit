@@ -16,6 +16,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   FolderOpenOutlined,
+  MinusCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -120,9 +121,15 @@ export default function EnvManager({
   const openEditor = (idx: number | null) => {
     setEditingIndex(idx);
     if (idx === null) {
-      form.setFieldsValue({ id: "", name: "", base_url: "" });
+      form.setFieldsValue({ id: "", name: "", base_url: "", common_headers: [] });
     } else if (draft) {
-      form.setFieldsValue({ ...draft.environments[idx] });
+      const e = draft.environments[idx];
+      form.setFieldsValue({
+        id: e.id,
+        name: e.name,
+        base_url: e.base_url,
+        common_headers: e.common_headers ?? [],
+      });
     }
     setEditorOpen(true);
   };
@@ -138,10 +145,25 @@ export default function EnvManager({
         form.setFields([{ name: "id", errors: ["环境 id 已存在"] }]);
         return;
       }
+      // 通用请求头：过滤掉 key 为空的行，并校验 key 不重复
+      const headers =
+        (values.common_headers as { key?: string; value?: string }[] | undefined)?.filter(
+          (h) => h && h.key && h.key.trim(),
+        ) ?? [];
+      const keySet = new Set<string>();
+      for (const h of headers) {
+        const k = h.key!.trim();
+        if (keySet.has(k)) {
+          message.error(`通用请求头 key 重复：${k}`);
+          return;
+        }
+        keySet.add(k);
+      }
       upsert({
         id: values.id.trim(),
         name: values.name.trim(),
         base_url: values.base_url.trim(),
+        common_headers: headers.map((h) => ({ key: h.key!.trim(), value: (h.value ?? "").trim() })),
       });
       setEditorOpen(false);
     } catch {
@@ -213,6 +235,16 @@ export default function EnvManager({
             render: (v: string) => v || <span style={{ color: "#faad14" }}>未配置</span>,
           },
           {
+            title: "通用头",
+            key: "headers",
+            width: 90,
+            align: "center",
+            render: (_, r) => {
+              const n = r.common_headers?.length ?? 0;
+              return n > 0 ? <Tag color="blue">{n}</Tag> : <span style={{ color: "rgba(0,0,0,0.25)" }}>0</span>;
+            },
+          },
+          {
             title: "操作",
             key: "op",
             width: 170,
@@ -277,6 +309,41 @@ export default function EnvManager({
           </Form.Item>
           <Form.Item name="base_url" label="baseUrl">
             <Input placeholder="如 http://127.0.0.1:8080" />
+          </Form.Item>
+          <Form.Item
+            label="通用请求头"
+            extra="执行/试运行时自动合并到每条用例（与用例自身请求头同名时，用例级覆盖环境级）"
+          >
+            <Form.List name="common_headers">
+              {(fields, { add, remove }) => (
+                <>
+                  {fields.map((field) => (
+                    <Space key={field.key} align="baseline" style={{ display: "flex", marginBottom: 8 }}>
+                      <Form.Item
+                        {...field}
+                        name={[field.name, "key"]}
+                        rules={[{ required: true, message: "请输入 header 名" }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Input placeholder="Header 名，如 Authorization" />
+                      </Form.Item>
+                      <Form.Item {...field} name={[field.name, "value"]} style={{ marginBottom: 0 }}>
+                        <Input placeholder="Header 值" />
+                      </Form.Item>
+                      <MinusCircleOutlined onClick={() => remove(field.name)} />
+                    </Space>
+                  ))}
+                  <Button
+                    type="dashed"
+                    onClick={() => add({ key: "", value: "" })}
+                    icon={<PlusOutlined />}
+                    size="small"
+                  >
+                    添加通用请求头
+                  </Button>
+                </>
+              )}
+            </Form.List>
           </Form.Item>
         </Form>
       </Modal>

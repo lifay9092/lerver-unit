@@ -37,7 +37,7 @@ const MIGRATIONS: &[&str] = &[
         request_body  TEXT NOT NULL DEFAULT '',
         query_params  TEXT NOT NULL DEFAULT '{}',
         assert_expr   TEXT NOT NULL DEFAULT '',
-        timeout_secs  INTEGER NOT NULL DEFAULT 30,
+        timeout_secs  INTEGER NOT NULL DEFAULT 10,
         remark        TEXT NOT NULL DEFAULT '',
         created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
         updated_at    TEXT NOT NULL DEFAULT (datetime('now','localtime'))

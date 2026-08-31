@@ -108,7 +108,14 @@ pub async fn run_cases(
             let conn = state.db.lock().unwrap();
             fetch_case(&conn, cid)?
         } {
-            Some(c) => c,
+            Some(mut c) => {
+                // 合并当前激活环境的通用请求头（用例级覆盖环境级，FR-E7）
+                c.headers = match env.active_env() {
+                    Some(e) => e.merged_headers(&c.headers),
+                    None => c.headers.clone(),
+                };
+                c
+            }
             None => {
                 let it = ItemSnapshot {
                     case_id: Some(cid),
@@ -355,7 +362,7 @@ pub async fn try_run(
     let base_url = env.active_base_url().to_string();
     let resolved = env_config::resolve_url(&input.url, &base_url).map_err(AppError::new)?;
 
-    let case = CaseRow {
+    let mut case = CaseRow {
         id: input.id.unwrap_or(0),
         group_id: input.group_id,
         group_path: None,
@@ -367,10 +374,15 @@ pub async fn try_run(
         query_params: input.query_params.clone().unwrap_or_default(),
         request_body: input.request_body.clone().unwrap_or_default(),
         assert_expr: input.assert_expr.clone().unwrap_or_default(),
-        timeout_secs: input.timeout_secs.unwrap_or(30),
+        timeout_secs: input.timeout_secs.unwrap_or(10),
         remark: input.remark.clone().unwrap_or_default(),
         created_at: "".into(),
         updated_at: "".into(),
+    };
+    // 合并当前激活环境的通用请求头（FR-E7）
+    case.headers = match env.active_env() {
+        Some(e) => e.merged_headers(&case.headers),
+        None => case.headers.clone(),
     };
 
     let client = reqwest::Client::builder()

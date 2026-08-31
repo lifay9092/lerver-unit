@@ -3,6 +3,8 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { openPath as openPathPlugin } from "@tauri-apps/plugin-opener";
 import type {
   ApiResult,
+  CaseExportInput,
+  CaseExportResult,
   CaseInput,
   CaseQuery,
   CaseRow,
@@ -174,6 +176,20 @@ export const importPreview = (filePath: string, templateId: number) =>
 /** 批量导入提交：跳过非法行并汇总 */
 export const importCommit = (groupId: number, filePath: string, templateId: number) =>
   call<ImportResult>("import_commit", { groupId, filePath, templateId });
+
+// ============ 用例批量导出/导入（固定 JSON，M9） ============
+
+/** 导出用例为固定 JSON 格式到指定路径 */
+export const caseExportJson = (input: CaseExportInput) =>
+  call<CaseExportResult>("case_export_json", { input });
+
+/** 固定 JSON 导入预览（不落库），返回与模板导入一致的结构 */
+export const caseImportJsonPreview = (filePath: string) =>
+  call<ImportPreviewRow[]>("case_import_json_preview", { filePath });
+
+/** 固定 JSON 导入提交：跳过非法行并汇总（复用 M8 忽略/自动命名规则） */
+export const caseImportJsonCommit = (groupId: number, filePath: string) =>
+  call<ImportResult>("case_import_json_commit", { groupId, filePath });
 
 /** 打开文件选择对话框，返回所选路径（取消则为 null） */
 export const pickFile = async (extensions: string[]): Promise<string | null> => {

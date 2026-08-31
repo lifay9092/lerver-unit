@@ -7,6 +7,7 @@ import {
   Collapse,
   Descriptions,
   Drawer,
+  Dropdown,
   Empty,
   Flex,
   Form,
@@ -25,29 +26,42 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
+  DownloadOutlined,
+  ImportOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
   SendOutlined,
-  ImportOutlined,
-  PlayCircleOutlined,
 } from "@ant-design/icons";
 import GroupTree from "../components/GroupTree";
 import ImportWizard from "../components/ImportWizard";
+import JsonImportDialog from "../components/JsonImportDialog";
 import RunDialog from "../components/RunDialog";
 import { useEnv } from "../App";
 import {
   assertExprValidate,
   caseCreate,
   caseDelete,
+  caseExportJson,
   caseIdsByGroup,
   casePage,
   caseUpdate,
   groupTree,
+  openPath,
   resolveUrl,
+  saveFile,
   tryRun,
 } from "../api/client";
-import type { AssertItem, CaseInput, CaseRow, GroupNode, TryRunResult } from "../types";
+import type {
+  AssertItem,
+  CaseExportInput,
+  CaseExportResult,
+  CaseInput,
+  CaseRow,
+  GroupNode,
+  TryRunResult,
+} from "../types";
 import { CONTENT_TYPES, HTTP_METHODS } from "../types";
 
 /** 方法 → 颜色 */
@@ -95,6 +109,10 @@ export default function TestCaseManage() {
   const [editing, setEditing] = useState<CaseRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // M9：固定 JSON 导入
+  const [jsonImportOpen, setJsonImportOpen] = useState(false);
+  const [jsonImportGroup, setJsonImportGroup] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [form] = Form.useForm<CaseInput>();
 
   // 执行（M5）
@@ -186,7 +204,7 @@ export default function TestCaseManage() {
       query_params: "{}",
       request_body: "",
       assert_expr: "status == 200",
-      timeout_secs: 30,
+      timeout_secs: undefined,
       remark: "",
     });
     setDrawerOpen(true);
@@ -227,7 +245,7 @@ export default function TestCaseManage() {
         headers: values.headers?.trim() || "{}",
         query_params: values.query_params?.trim() || "{}",
         assert_expr: values.assert_expr?.trim() || "",
-        timeout_secs: values.timeout_secs ?? 30,
+        timeout_secs: values.timeout_secs,
         remark: values.remark ?? "",
       };
       if (editing) {
@@ -292,6 +310,59 @@ export default function TestCaseManage() {
     setRunOpen(true);
   };
 
+  // —— 导出（M9：固定 JSON）——
+  const doExport = async (
+    scope: "all" | "group" | "selected",
+    explicitGroupId?: number | null,
+  ) => {
+    try {
+      let targetGroupId: number | undefined;
+      let caseIds: number[] | undefined;
+      if (scope === "selected") {
+        if (selectedRowKeys.length === 0) {
+          message.info("请先勾选要导出的用例");
+          return;
+        }
+        caseIds = selectedRowKeys;
+      } else if (scope === "group") {
+        if (explicitGroupId != null) {
+          targetGroupId = explicitGroupId;
+        } else if (groupId != null) {
+          targetGroupId = groupId;
+        } else {
+          message.info("请先在左侧选择要导出的分组");
+          return;
+        }
+      }
+      const defaultName = `lever-unit-cases-${scope}-${Date.now()}.json`;
+      const path = await saveFile(["json"], defaultName);
+      if (!path) return;
+      setExporting(true);
+      const input: CaseExportInput = {
+        scope: { kind: scope, group_id: targetGroupId, recursive: true, case_ids: caseIds },
+        file_path: path,
+      };
+      const res: CaseExportResult = await caseExportJson(input);
+      message.success(`已导出 ${res.count} 条用例到 ${res.file_path}`);
+      // 导出后用默认方式打开文件，便于查看
+      try {
+        await openPath(res.file_path);
+      } catch {
+        /* 打开失败不阻断导出结果 */
+      }
+    } catch (e) {
+      message.error(String(e instanceof Error ? e.message : e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // —— 固定 JSON 导入（M9）——
+  const openJsonImport = (defaultGroup?: number | null) => {
+    setJsonImportGroup(defaultGroup ?? null);
+    setJsonImportOpen(true);
+  };
+
   const handleTryRun = async () => {
     let values: CaseInput;
     try {
@@ -312,7 +383,7 @@ export default function TestCaseManage() {
         query_params: values.query_params?.trim() || "{}",
         request_body: values.request_body || "",
         assert_expr: values.assert_expr?.trim() || "",
-        timeout_secs: values.timeout_secs ?? 30,
+        timeout_secs: values.timeout_secs,
         remark: values.remark ?? "",
       });
       setTryResult(res);
@@ -395,6 +466,8 @@ export default function TestCaseManage() {
             setGroupId(id);
             setPage(1);
           }}
+          onExportGroup={(id) => doExport("group", id)}
+          onImportGroup={(id) => openJsonImport(id)}
         />
       </div>
 
@@ -434,6 +507,31 @@ export default function TestCaseManage() {
             <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
               批量导入
             </Button>
+            <Button icon={<ImportOutlined />} onClick={() => openJsonImport()}>
+              导入(JSON)
+            </Button>
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: "selected",
+                    label: "导出勾选用例",
+                    disabled: selectedRowKeys.length === 0,
+                  },
+                  {
+                    key: "group",
+                    label: "按当前分组导出",
+                    disabled: groupId == null,
+                  },
+                  { key: "all", label: "导出全部用例" },
+                ],
+                onClick: ({ key }) => doExport(key as "all" | "group" | "selected"),
+              }}
+            >
+              <Button icon={<DownloadOutlined />} loading={exporting}>
+                导出
+              </Button>
+            </Dropdown>
             <Button icon={<PlayCircleOutlined />} onClick={openRunByGroup}>
               {groupId === null ? "执行全部" : "执行本分组"}
             </Button>
@@ -517,8 +615,13 @@ export default function TestCaseManage() {
             <Form.Item name="method" label="请求方法" style={{ width: 140 }}>
               <Select options={HTTP_METHODS.map((m) => ({ value: m, label: m }))} />
             </Form.Item>
-            <Form.Item name="timeout_secs" label="超时时间（秒）" style={{ width: 140 }}>
-              <InputNumber min={1} max={600} style={{ width: "100%" }} />
+            <Form.Item
+              name="timeout_secs"
+              label="超时时间（秒）"
+              style={{ width: 160 }}
+              extra="不填则默认 10 秒"
+            >
+              <InputNumber<number> min={1} max={600} style={{ width: "100%" }} placeholder="默认 10" />
             </Form.Item>
             <Form.Item name="content_type" label="请求内容类型" style={{ flex: 1 }}>
               <Select
@@ -647,6 +750,17 @@ export default function TestCaseManage() {
         onImported={() => {
           setPage(1);
           loadCases();
+        }}
+      />
+
+      <JsonImportDialog
+        open={jsonImportOpen}
+        defaultGroupId={jsonImportGroup}
+        onClose={() => setJsonImportOpen(false)}
+        onImported={() => {
+          setPage(1);
+          loadCases();
+          loadTree();
         }}
       />
     </Flex>

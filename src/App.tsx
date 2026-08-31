@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { App as AntApp, Button, Layout, Menu, Select, Space } from "antd";
+import { App as AntApp, Button, Layout, Menu, Select, Space, Tooltip } from "antd";
 import {
   ApartmentOutlined,
   DatabaseOutlined,
@@ -42,19 +42,23 @@ function EnvSelector() {
   const { env, switchEnv, reloadEnv } = useEnv();
   const [manageOpen, setManageOpen] = useState(false);
   if (!env) return null;
+  const activeEnv = env.environments.find((e) => e.id === env.active);
+  const headerCount = activeEnv?.common_headers?.length ?? 0;
   return (
     <Space size={12}>
       <span style={{ color: "rgba(0,0,0,0.65)" }}>当前环境：</span>
-      <Select
-        size="small"
-        style={{ minWidth: 160 }}
-        value={env.active}
-        onChange={(id) => switchEnv(id)}
-        options={env.environments.map((e) => ({
-          value: e.id,
-          label: `${e.name} (${e.base_url || "未配置"})`,
-        }))}
-      />
+      <Tooltip title={`当前环境通用请求头：${headerCount} 条（执行/试运行时自动合并到每条用例）`}>
+        <Select
+          size="small"
+          style={{ minWidth: 160 }}
+          value={env.active}
+          onChange={(id) => switchEnv(id)}
+          options={env.environments.map((e) => ({
+            value: e.id,
+            label: `${e.name} (${e.base_url || "未配置"})`,
+          }))}
+        />
+      </Tooltip>
       <Button
         size="small"
         icon={<SettingOutlined />}
