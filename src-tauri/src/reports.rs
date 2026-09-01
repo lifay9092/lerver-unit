@@ -299,6 +299,23 @@ fn query_items(conn: &rusqlite::Connection, report_id: i64) -> Result<Vec<Report
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Excel 单单元格字符串上限为 32767 字符，超出会导致整个写出失败。
+/// 对可能超长的字段做截断并附说明；完整内容请改用 JSON 导出。
+const MAX_XLSX_CELL_LEN: usize = 32767;
+
+fn fit_cell(s: String) -> String {
+    if s.chars().count() <= MAX_XLSX_CELL_LEN {
+        return s;
+    }
+    let total = s.chars().count();
+    let suffix = format!(
+        "\n…[已截断，原内容 {total} 字符，超过 Excel 单单元格 32767 字符上限；请用 JSON 导出获取完整内容]"
+    );
+    let keep = MAX_XLSX_CELL_LEN.saturating_sub(suffix.chars().count());
+    let truncated: String = s.chars().take(keep).collect();
+    format!("{truncated}{suffix}")
+}
+
 /// xlsx 导出：汇总 sheet + 明细 sheet
 fn export_xlsx(detail: &ReportDetail, path: &Path) -> Result<(), AppError> {
     use rust_xlsxwriter::{Format, Workbook};
@@ -346,7 +363,7 @@ fn export_xlsx(detail: &ReportDetail, path: &Path) -> Result<(), AppError> {
         detail.report.duration_ms.to_string(),
     ];
     for (c, v) in s_vals.iter().enumerate() {
-        summary.write_string(1, c as u16, v)?;
+        summary.write_string(1, c as u16, &fit_cell(v.clone()))?;
     }
     summary.set_column_width(0, 8)?;
     summary.set_column_width(1, 28)?;
@@ -402,7 +419,7 @@ fn export_xlsx(detail: &ReportDetail, path: &Path) -> Result<(), AppError> {
             it.response_body.clone(),
         ];
         for (c, v) in vals.iter().enumerate() {
-            detail_ws.write_string(row, c as u16, v)?;
+            detail_ws.write_string(row, c as u16, &fit_cell(v.clone()))?;
         }
     }
     detail_ws.set_column_width(0, 6)?;

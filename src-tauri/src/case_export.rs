@@ -24,9 +24,9 @@ use crate::AppState;
 
 const EXPORT_FORMAT: &str = "lever-unit-case-export";
 const SUPPORTED_VERSION: u32 = 1;
-/// 超时默认值（FR-C2：不填默认 10s）。导出时若该值与默认一致则写 null（表达「使用默认」），
-/// 导入时 null/缺失再回退为 10，保证「默认语义」往返无损。
-const DEFAULT_TIMEOUT: i64 = 10;
+/// 超时默认值（FR-C2：不填默认 5s）。导出时若该值与默认一致则写 null（表达「使用默认」），
+/// 导入时 null/缺失再回退为 5，保证「默认语义」往返无损。
+const DEFAULT_TIMEOUT: i64 = 5;
 
 // ============ 入参（遵循 M3+ 约定：snake_case + deny_unknown_fields） ============
 
@@ -510,7 +510,7 @@ mod tests {
         let conn = setup();
         conn.execute("INSERT INTO groups (id, name) VALUES (1, 'G1')", [])
             .unwrap();
-        insert_case_with(&conn, 1, "默认超时", "/api/a", 10); // 默认 10 → 写 null
+        insert_case_with(&conn, 1, "默认超时", "/api/a", 5); // 默认 5 → 写 null
         insert_case_with(&conn, 1, "显式30", "/api/b", 30); // 显式 30 → 写 30
 
         let path = tmp_json("m9_fmt.json");
@@ -587,7 +587,7 @@ mod tests {
             .unwrap()
             .map(|r| r.unwrap())
             .collect();
-        // 导入默认超时(null) → 回退 10；显式 30 保持
+        // 导入默认超时(null) → 回退 5；显式 30 保持
         let timeouts: Vec<i64> = conn
             .prepare("SELECT timeout_secs FROM test_cases WHERE group_id = 2 ORDER BY id")
             .unwrap()
@@ -596,7 +596,7 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert!(names.contains(&"登录成功".to_string()));
-        assert!(timeouts.contains(&10));
+        assert!(timeouts.contains(&5));
         assert!(timeouts.contains(&30));
     }
 

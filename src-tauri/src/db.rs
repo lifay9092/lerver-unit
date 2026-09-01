@@ -3,11 +3,14 @@ use std::path::PathBuf;
 
 use crate::error::AppError;
 
-/// 应用数据目录（数据库、环境配置文件都放在这里）
-/// Windows 下实际路径：%APPDATA%\com.leverunit.app\
-pub fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
-    use tauri::Manager;
-    let dir = app.path().app_data_dir()?;
+/// 应用数据目录（数据库 lever-unit.db、环境配置 environments.json 都放在这里）
+/// 改为「当前可执行文件所在目录」：数据库与配置随程序走，便于便携部署/整体拷贝。
+pub fn data_dir(_app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| AppError::new("无法获取可执行文件所在目录"))?
+        .to_path_buf();
     Ok(dir)
 }
 

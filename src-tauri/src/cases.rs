@@ -246,9 +246,9 @@ pub(crate) fn validate_case(input: &CaseInput, allow_empty_name: bool) -> Result
         }
     }
 
-    let timeout = input.timeout_secs.unwrap_or(10);
+    let timeout = input.timeout_secs.unwrap_or(5);
     if !(1..=600).contains(&timeout) {
-        return Err(AppError::new("超时时间需在 1 ~ 600 秒之间（不填默认 10 秒）"));
+        return Err(AppError::new("超时时间需在 1 ~ 600 秒之间（不填默认 5 秒）"));
     }
 
     // 校验表达式：保存阶段即报错（FR-C5）
@@ -274,7 +274,7 @@ pub(crate) fn insert_case(conn: &Connection, input: &CaseInput) -> Result<i64, A
             input.query_params.clone().unwrap_or_default(),
             input.request_body.clone().unwrap_or_default(),
             input.assert_expr.clone().unwrap_or_default(),
-            input.timeout_secs.unwrap_or(10),
+            input.timeout_secs.unwrap_or(5),
             input.remark.clone().unwrap_or_default(),
         ],
     )?;
@@ -342,7 +342,7 @@ pub fn case_update(input: CaseInput, state: State<'_, AppState>) -> Result<CaseR
             input.query_params.clone().unwrap_or_default(),
             input.request_body.clone().unwrap_or_default(),
             input.assert_expr.clone().unwrap_or_default(),
-            input.timeout_secs.unwrap_or(10),
+            input.timeout_secs.unwrap_or(5),
             input.remark.clone().unwrap_or_default(),
             id,
         ],

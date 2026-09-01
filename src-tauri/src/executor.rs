@@ -374,7 +374,7 @@ pub async fn try_run(
         query_params: input.query_params.clone().unwrap_or_default(),
         request_body: input.request_body.clone().unwrap_or_default(),
         assert_expr: input.assert_expr.clone().unwrap_or_default(),
-        timeout_secs: input.timeout_secs.unwrap_or(10),
+        timeout_secs: input.timeout_secs.unwrap_or(5),
         remark: input.remark.clone().unwrap_or_default(),
         created_at: "".into(),
         updated_at: "".into(),

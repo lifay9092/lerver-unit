@@ -327,8 +327,18 @@ fn is_dynamic_fn(s: &str) -> bool {
     (s.starts_with("now(") || s.starts_with("len(")) && s.ends_with(')')
 }
 
-/// 解析校验表达式；空表达式返回空规则集（视为不校验）
+/// 解析校验表达式。
+/// - 空表达式（未填写校验表达式）返回默认规则集 `[status == 200]`：
+///   即未填时默认仅判断 HTTP 状态码等于 200。
+/// - 非空表达式按 AND 拆分为多条规则。
 pub fn parse(expr: &str) -> Result<Vec<Rule>, String> {
+    if expr.trim().is_empty() {
+        return Ok(vec![Rule {
+            extractor: Extractor::Status,
+            op: CompareOp::Eq,
+            expected: "200".to_string(),
+        }]);
+    }
     let mut rules = Vec::new();
     for (idx, seg) in split_and(expr).into_iter().enumerate() {
         let rule = parse_one(&seg).map_err(|e| format!("第 {} 条规则「{}」{}", idx + 1, seg, e))?;
@@ -387,9 +397,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_empty() {
-        assert!(parse("").unwrap().is_empty());
-        assert!(parse("   \n  ").unwrap().is_empty());
+    fn parse_empty_defaults_to_status_200() {
+        let rules = parse("").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].extractor, Extractor::Status);
+        assert_eq!(rules[0].op, CompareOp::Eq);
+        assert_eq!(rules[0].expected, "200");
+        // 纯空白等价空表达式，同样返回默认规则
+        assert_eq!(parse("   \n  ").unwrap(), rules);
     }
 
     #[test]
